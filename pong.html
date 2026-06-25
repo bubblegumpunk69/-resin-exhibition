@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tennis — msh.bio</title>
+<style>
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('fonts/EBGaramond.woff2') format('woff2');
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0a12}
+canvas{display:block}
+#score{position:fixed;top:2.5vh;left:0;right:0;text-align:center;
+  font:300 clamp(14px,2.8vw,24px)/1 'EB Garamond',Georgia,serif;
+  color:rgba(240,237,228,0.25);letter-spacing:0.2em;pointer-events:none}
+#msg{position:fixed;bottom:6vh;left:0;right:0;text-align:center;
+  font:300 clamp(11px,1.6vw,14px)/1 'EB Garamond',Georgia,serif;
+  color:rgba(240,237,228,0.35);letter-spacing:0.25em;pointer-events:none;
+  opacity:0;transition:opacity 0.5s}
+#msg.show{opacity:1}
+</style>
+</head>
+<body>
+<div id="score"><span id="ps">0</span> — <span id="cs">0</span></div>
+<div id="msg">click to serve</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a14);
+
+  var camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 120);
+  camera.position.set(0, 5.5, 18);
+  camera.lookAt(0, 0.8, -2);
+
+  var renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  document.body.appendChild(renderer.domElement);
+
+  window.addEventListener('resize', function(){
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  }, {passive:true});
+
+  // Lighting — bright stadium
+  scene.add(new THREE.AmbientLight(0xd0d8e8, 0.5));
+  var sun = new THREE.DirectionalLight(0xfff5e8, 0.9);
+  sun.position.set(5, 20, 8);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = 50;
+  sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
+  sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
+  sun.shadow.bias = -0.002;
+  scene.add(sun);
+  var fill = new THREE.DirectionalLight(0xc0c8e0, 0.3);
+  fill.position.set(-8, 12, -5); scene.add(fill);
+
+  // ── Court (regulation: 23.77m x 10.97m doubles) ──
+  var CL = 23.77, CW = 10.97, netH = 1.07;
+
+  // Blue hard court surface (US Open blue)
+  var courtMat = new THREE.MeshStandardMaterial({color:0x2a5caa, roughness:0.55, metalness:0.02});
+  var courtGeo = new THREE.PlaneGeometry(CW + 8, CL + 12);
+  var courtFloor = new THREE.Mesh(courtGeo, courtMat);
+  courtFloor.rotation.x = -Math.PI/2; courtFloor.receiveShadow = true; scene.add(courtFloor);
+
+  // Inner court (slightly different blue)
+  var innerMat = new THREE.MeshStandardMaterial({color:0x2860b0, roughness:0.5, metalness:0.02});
+  var inner = new THREE.Mesh(new THREE.PlaneGeometry(CW, CL), innerMat);
+  inner.rotation.x = -Math.PI/2; inner.position.y = 0.005; inner.receiveShadow = true; scene.add(inner);
+
+  // Court lines (white)
+  var lMat = new THREE.MeshBasicMaterial({color:0xffffff});
+  function line(w,d,x,z){
+    var m = new THREE.Mesh(new THREE.PlaneGeometry(w,d), lMat);
+    m.rotation.x = -Math.PI/2; m.position.set(x, 0.01, z); scene.add(m);
+  }
+  line(CW, 0.05, 0, CL/2);    // baseline near
+  line(CW, 0.05, 0, -CL/2);   // baseline far
+  line(0.05, CL, CW/2, 0);    // doubles sideline right
+  line(0.05, CL, -CW/2, 0);   // doubles sideline left
+  line(0.05, CL, CW/2-1.37, 0);  // singles sideline right
+  line(0.05, CL, -CW/2+1.37, 0); // singles sideline left
+  line(CW-2.74, 0.05, 0, 6.4);   // service line near
+  line(CW-2.74, 0.05, 0, -6.4);  // service line far
+  line(0.05, 12.8, 0, 0);         // center service line
+  line(0.3, 0.05, 0, CL/2);      // center mark near
+  line(0.3, 0.05, 0, -CL/2);     // center mark far
+
+  // ── Net ──
+  var netMat = new THREE.MeshStandardMaterial({color:0xeeeeee, roughness:0.7, transparent:true, opacity:0.4, side:THREE.DoubleSide});
+  var netMesh = new THREE.Mesh(new THREE.PlaneGeometry(CW+1.8, netH), netMat);
+  netMesh.position.set(0, netH/2, 0); scene.add(netMesh);
+
+  var postMat = new THREE.MeshStandardMaterial({color:0x555555, roughness:0.3, metalness:0.6});
+  [-CW/2-0.9, CW/2+0.9].forEach(function(x){
+    var m = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, netH+0.1, 8), postMat);
+    m.position.set(x, netH/2, 0); m.castShadow = true; scene.add(m);
+  });
+  var wireMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, CW+1.8, 6),
+    new THREE.MeshStandardMaterial({color:0xcccccc, roughness:0.4, metalness:0.3}));
+  wireMesh.rotation.z = Math.PI/2; wireMesh.position.set(0, netH, 0); scene.add(wireMesh);
+  var strap = new THREE.Mesh(new THREE.BoxGeometry(0.05, netH*0.95, 0.02),
+    new THREE.MeshStandardMaterial({color:0xffffff}));
+  strap.position.set(0, netH*0.47, 0); scene.add(strap);
+
+  // ── Stadium bowl ──
+  var bowlColors = [0x1a2244, 0x1e2850, 0x22305a, 0x1c2648];
+  for(var tier = 0; tier < 15; tier++){
+    var h = 2 + tier * 1.8;
+    var r = 18 + tier * 2.2;
+    var segs = 64;
+    var mat = new THREE.MeshStandardMaterial({color:bowlColors[tier%4], roughness:0.7, metalness:0.05});
+    for(var s = 0; s < segs; s++){
+      var ang = (s/segs)*Math.PI*2;
+      if(ang > Math.PI*0.78 && ang < Math.PI*1.22) continue;
+      var sx = Math.sin(ang)*r, sz = Math.cos(ang)*r;
+      var w = r*Math.PI*2/segs*1.01;
+      var block = new THREE.Mesh(new THREE.BoxGeometry(w, 1.6, 1.8), mat);
+      block.position.set(sx, h, sz);
+      block.lookAt(0, h, 0);
+      scene.add(block);
+    }
+  }
+
+  // Concourse walkways
+  var concMat = new THREE.MeshStandardMaterial({color:0x333344, roughness:0.7});
+  [5, 12, 20].forEach(function(tierH){
+    var cr = 18 + (tierH-2)/1.8*2.2;
+    var conc = new THREE.Mesh(new THREE.TorusGeometry(cr+1, 0.3, 4, 48, Math.PI*1.56), concMat);
+    conc.position.y = tierH+0.8; conc.rotation.x = Math.PI/2;
+    conc.rotation.z = Math.PI*0.78;
+    scene.add(conc);
+  });
+
+  // ── Roof trusses ──
+  var trussMat = new THREE.MeshStandardMaterial({color:0x555566, roughness:0.35, metalness:0.6});
+  for(var ti = 0; ti < 12; ti++){
+    var ang = (ti/12)*Math.PI*2;
+    var tr = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 45), trussMat);
+    tr.position.set(Math.sin(ang)*22, 30, Math.cos(ang)*22);
+    tr.lookAt(0, 30, 0);
+    scene.add(tr);
+  }
+  var roofRing = new THREE.Mesh(new THREE.TorusGeometry(22, 0.25, 6, 48), trussMat);
+  roofRing.position.y = 30; roofRing.rotation.x = Math.PI/2; scene.add(roofRing);
+  var innerRoofRing = new THREE.Mesh(new THREE.TorusGeometry(10, 0.2, 6, 32), trussMat);
+  innerRoofRing.position.y = 31; innerRoofRing.rotation.x = Math.PI/2; scene.add(innerRoofRing);
+
+  // ── Overhead lights ──
+  var lightFixMat = new THREE.MeshBasicMaterial({color:0xffffff});
+  for(var ring = 0; ring < 3; ring++){
+    var lr = 6 + ring*6;
+    var lh = 28 + ring*1.5;
+    var count = 12 + ring*6;
+    for(var li = 0; li < count; li++){
+      var la = (li/count)*Math.PI*2;
+      var lf = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.3), lightFixMat);
+      lf.position.set(Math.sin(la)*lr, lh, Math.cos(la)*lr);
+      scene.add(lf);
+    }
+  }
+
+  // Stadium spots (bright, aimed at court)
+  [[0,25,0],[-8,22,6],[8,22,6],[-6,24,-8],[6,24,-8],[0,20,12]].forEach(function(p){
+    var sp = new THREE.SpotLight(0xfff8f0, 0.5, 60, 0.35, 0.7);
+    sp.position.set(p[0],p[1],p[2]);
+    sp.target.position.set(0,0,0);
+    scene.add(sp); scene.add(sp.target);
+  });
+
+  // ── Ball ──
+  var ballMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.033, 16, 16),
+    new THREE.MeshStandardMaterial({color:0xc8ff00, roughness:0.6, metalness:0.02})
+  );
+  ballMesh.castShadow = true; scene.add(ballMesh);
+  var shadowMat = new THREE.MeshBasicMaterial({color:0x000000, transparent:true, opacity:0.2});
+  var shadowMesh = new THREE.Mesh(new THREE.CircleGeometry(0.05,12), shadowMat);
+  shadowMesh.rotation.x = -Math.PI/2; scene.add(shadowMesh);
+
+  // ── Rackets ──
+  function makeRacket(col){
+    var g = new THREE.Group();
+    var head = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.18, 0.025, 20),
+      new THREE.MeshStandardMaterial({color:col, roughness:0.4, metalness:0.1})
+    );
+    head.rotation.x = Math.PI/2; head.castShadow = true; g.add(head);
+    var frame = new THREE.Mesh(
+      new THREE.TorusGeometry(0.18, 0.015, 8, 20),
+      new THREE.MeshStandardMaterial({color:0xcccccc, roughness:0.3, metalness:0.6})
+    );
+    frame.rotation.x = Math.PI/2; g.add(frame);
+    var handle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.022, 0.28, 8),
+      new THREE.MeshStandardMaterial({color:0x2a1a0e, roughness:0.4, metalness:0.05})
+    );
+    handle.position.y = -0.28; handle.castShadow = true; g.add(handle);
+    return g;
+  }
+  var pRacket = makeRacket(0xdd3333); scene.add(pRacket);
+  var cRacket = makeRacket(0x3344aa); scene.add(cRacket);
+
+  // ── Game state ──
+  var bx=0, by=1.5, bz=CL/2-2;
+  var bvx=0, bvy=0, bvz=0, spinX=0, spinZ=0;
+  var pX=0, prevPX=0, cX=0, prevCX=0;
+  var mouseNX=0;
+  var pScore=0, cScore=0, rally=0, state='serve';
+  var DRAG=0.12, COR=0.72, G=9.81, MAGNUS=2.5;
+  var psEl=document.getElementById('ps'), csEl=document.getElementById('cs');
+  var msgEl=document.getElementById('msg');
+  msgEl.classList.add('show');
+
+  function serve(){
+    bx=pX*0.3; by=2.5; bz=CL/2-1;
+    var ang=(Math.random()-0.5)*0.3;
+    bvx=Math.sin(ang)*3;
+    bvy=4;
+    bvz=-18-Math.random()*3;
+    spinX=(Math.random()-0.5)*5;
+    spinZ=-8;
+    state='play'; rally=0;
+    msgEl.classList.remove('show');
+  }
+
+  function scored(who){
+    if(who==='p') pScore++; else cScore++;
+    psEl.textContent=pScore; csEl.textContent=cScore;
+    state='serve'; msgEl.classList.add('show');
+  }
+
+  document.addEventListener('click', function(){ if(state==='serve') serve(); });
+  document.addEventListener('touchstart', function(){ if(state==='serve') serve(); }, {passive:true});
+  document.addEventListener('mousemove', function(e){ mouseNX=(e.clientX/window.innerWidth-0.5)*2; }, {passive:true});
+  document.addEventListener('touchmove', function(e){ mouseNX=(e.touches[0].clientX/window.innerWidth-0.5)*2; }, {passive:true});
+
+  var clock = new THREE.Clock();
+
+  function loop(){
+    requestAnimationFrame(loop);
+    var dtRaw = Math.min(clock.getDelta(), 0.033);
+    var xLim = CW/2 - 0.5;
+
+    prevPX=pX;
+    pX = Math.max(-xLim, Math.min(xLim, mouseNX*CW*0.6));
+    var padVX = (pX-prevPX)/(dtRaw||0.016);
+    pRacket.position.set(pX, 1.0, CL/2-0.8);
+    pRacket.rotation.y = mouseNX*0.15;
+
+    prevCX=cX;
+    var ct=bx+bvx*0.06+spinX*0.01;
+    cX+=(ct-cX)*(0.04+Math.min(rally*0.003,0.03));
+    cX=Math.max(-xLim, Math.min(xLim, cX));
+    var cpuVX=(cX-prevCX)/(dtRaw||0.016);
+    cRacket.position.set(cX, 1.0, -CL/2+0.8);
+    cRacket.rotation.y = Math.PI;
+
+    var SUB=4;
+    for(var sub=0;sub<SUB;sub++){
+      if(state!=='play') break;
+      var dt=dtRaw/SUB;
+      var speed=Math.sqrt(bvx*bvx+bvy*bvy+bvz*bvz);
+
+      bvx -= bvx*DRAG*speed*dt*0.01;
+      bvy -= G*dt + bvy*DRAG*speed*dt*0.005;
+      bvz -= bvz*DRAG*speed*dt*0.01;
+      bvx += spinZ*MAGNUS*dt*0.002;
+      bvy += Math.abs(spinZ)*MAGNUS*dt*0.0005;
+
+      bx+=bvx*dt; by+=bvy*dt; bz+=bvz*dt;
+      spinX*=0.998; spinZ*=0.998;
+
+      // Ground bounce
+      if(by<0.033 && bvy<0){
+        if(Math.abs(bx)<CW/2+1 && Math.abs(bz)<CL/2+1){
+          by=0.033; bvy=-bvy*COR;
+          bvx+=spinX*0.02; bvz+=spinZ*0.02;
+          spinX*=0.6; spinZ*=0.6;
+          if(Math.abs(bvy)<0.5) bvy=1;
+        }
+      }
+
+      // Net
+      if(Math.abs(bz)<0.1 && by<netH && by>0){
+        bz=Math.sign(bz||0.01)*0.1; bvz*=-0.15; bvy*=0.5;
+      }
+
+      // Player hit
+      if(bz>CL/2-2.5 && bvz>0 && by<2.2 && by>0.2){
+        var dx=bx-pX;
+        if(Math.abs(dx)<1.2){
+          var off=dx/1.2;
+          var pow=1+Math.min(Math.abs(padVX)*0.08,0.5);
+          bvz=-(20+rally*0.3)*pow;
+          bvx=off*8+padVX*0.15;
+          bvy=5+Math.abs(off)*2+Math.random();
+          spinX=padVX*2; spinZ=-10*pow;
+          bz=CL/2-2.6; rally++;
+        }
+      }
+
+      // CPU hit
+      if(bz<-CL/2+2 && bvz<0 && by<2.2 && by>0.2){
+        var dx=bx-cX;
+        if(Math.abs(dx)<1+Math.min(rally*0.01,0.3)){
+          var off=dx/1.2;
+          bvz=(18+rally*0.2);
+          bvx=off*6+cpuVX*0.12+(Math.random()-0.5)*2;
+          bvy=4.5+Math.random();
+          spinX=cpuVX+(Math.random()-0.5)*3;
+          spinZ=8; bz=-CL/2+2.1; rally++;
+        }
+      }
+
+      if(bz>CL/2+3){scored('c');break;}
+      if(bz<-CL/2-3){scored('p');break;}
+      if(by<-1){scored(bz>0?'c':'p');break;}
+      if(Math.abs(bx)>CW/2+4){scored(bvz>0?'c':'p');break;}
+    }
+
+    ballMesh.position.set(bx,by,bz);
+    ballMesh.rotation.x+=spinZ*dtRaw*0.3;
+    ballMesh.rotation.z+=spinX*dtRaw*0.3;
+    shadowMesh.position.set(bx,0.005,bz);
+    var h=Math.max(0,by);
+    shadowMesh.scale.setScalar(1+h*0.8);
+    shadowMat.opacity=Math.max(0,0.2-h*0.03);
+
+    renderer.render(scene, camera);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
