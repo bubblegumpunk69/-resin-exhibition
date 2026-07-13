@@ -2223,374 +2223,6 @@ body::before{
 })();
 </script>
 <script>
-var ResinAudio = (function(){
-  var ctx=null, voices=[], noiseBuffer=null;
-  var NOTES=[130.81,146.83,164.81,196.00,220.00,261.63,293.66,329.63,392.00,440.00,523.25];
-  var WAVES=['sine','triangle','sawtooth'];
-  var MAX_MIX_LAYERS=6;
-
-  // Element-specific synthesis recipes so what you hear matches the ELEMENT
-  // filter (strings/horns/percussion/vocals/bass/keys/synth/guitar/texture),
-  // plus full-mix (whole composition, built by layering the work's actual
-  // stems rather than a single generic tone) and kit (full drum kit).
-  var RECIPES={
-    'full-mix':{kind:'pad',wave:'sawtooth',wave2:'triangle',chord:true,fifth:true,attack:0.3,filterBase:1500,q:0.6},
-    'strings':{kind:'pad',wave:'sawtooth',detune:true,attack:0.35,filterBase:1100},
-    'horns':{kind:'pad',wave:'square',attack:0.09,filterBase:2000,vibrato:5.5},
-    'vocals':{kind:'pad',wave:'sine',wave2:'triangle',attack:0.18,filterBase:1500,filterType:'bandpass',q:2.2},
-    'bass':{kind:'pad',wave:'triangle',attack:0.02,filterBase:450,octave:-2},
-    'synth':{kind:'pad',wave:'sawtooth',attack:0.1,filterBase:1000,filterSweep:true},
-    'texture':{kind:'pad',wave:'sine',attack:0.7,filterBase:500,octave:-1},
-    'keys':{kind:'pulse-tone',wave:'triangle',decay:0.5,interval:900},
-    'guitar':{kind:'pulse-tone',wave:'sawtooth',decay:0.9,interval:1100,detuneOsc:true,octave:-1},
-    'percussion':{kind:'pulse-noise',tone:'hat',interval:280},
-    'kit':{kind:'pulse-noise',tone:'kit',interval:420}
-  };
-
-  // Genre modifiers layer on top of the element recipe above: same instrument,
-  // different character, so genre is audible everywhere, not just element.
-  var GENRE_MODS={
-    'resin-selects':{},
-    'classical':{attackMult:2.2,filterMult:0.75},
-    'minimal-house':{attackMult:0.45,filterMult:1.3,waveOverride:'square'},
-    'jazz':{attackMult:1.3,filterMult:1.05},
-    'rap':{attackMult:0.3,filterMult:0.9},
-    'ambient':{attackMult:3.2,filterMult:0.6},
-    'rock':{attackMult:0.35,filterMult:1.4,waveOverride:'square'},
-    'pop':{attackMult:0.6,filterMult:1.25},
-    'soul':{attackMult:1.6,filterMult:0.95},
-    'cinematic':{attackMult:3.0,filterMult:0.85},
-    'folk':{attackMult:1.1,filterMult:0.9,waveOverride:'triangle'}
-  };
-
-  // Real rhythmic patterns per genre: onset offsets (ms) within a repeating
-  // loop, not just a faster/slower flat interval. This is what actually
-  // makes minimal-house read as four-on-the-floor, rap as boom-bap, jazz as
-  // swung, and classical/ambient/cinematic as sparse and non-metronomic
-  // rather than "still a beeping loop, just slower."
-  var GENRE_RHYTHM={
-    'resin-selects':{loop:800,hits:[0,400]},
-    'classical':{loop:2600,hits:[0,1300],humanize:140},
-    'minimal-house':{loop:2000,hits:[0,500,1000,1500]},
-    'jazz':{loop:1800,hits:[0,300,900,1200],humanize:40},
-    'rap':{loop:1500,hits:[0,750,1125]},
-    'ambient':{loop:4200,hits:[0],humanize:320},
-    'rock':{loop:1000,hits:[0,250,500,750]},
-    'pop':{loop:1000,hits:[0,500,750]},
-    'soul':{loop:1600,hits:[0,400,1000,1200]},
-    'cinematic':{loop:3400,hits:[0,1700],humanize:220},
-    'folk':{loop:1400,hits:[0,700,1050]}
-  };
-
-  // Chord quality per genre for the full-mix layer's harmonic content:
-  // interval ratios above the root (null = omit that voice entirely).
-  // Power chords for rock (no third), 7ths for jazz, root-only for
-  // rhythm-led rap/minimal-house, a suspended 4th for ambient's open feel.
-  var GENRE_CHORD={
-    'resin-selects':{third:1.25,fifth:1.5},
-    'classical':{third:1.25,fifth:1.5},
-    'minimal-house':{third:null,fifth:1.5},
-    'jazz':{third:1.25,fifth:1.5,seventh:1.78},
-    'rap':{third:null,fifth:null},
-    'ambient':{third:null,fifth:1.333},
-    'rock':{third:null,fifth:1.5},
-    'pop':{third:1.25,fifth:1.5},
-    'soul':{third:1.2,fifth:1.5,seventh:1.68},
-    'cinematic':{third:1.25,fifth:1.5,seventh:1.875},
-    'folk':{third:1.25,fifth:1.5}
-  };
-
-  // Percussion timbre per genre: rap leans toward a deep 808-style sub kick
-  // with a long tail, minimal-house toward a tight electronic click, etc.
-  var GENRE_PERC={
-    'resin-selects':{kickFreq:180,kickDecay:0.22,hatFreq:6000,hatDecay:0.06},
-    'classical':{kickFreq:150,kickDecay:0.35,hatFreq:5000,hatDecay:0.08},
-    'minimal-house':{kickFreq:150,kickDecay:0.16,hatFreq:8500,hatDecay:0.04},
-    'jazz':{kickFreq:170,kickDecay:0.3,hatFreq:7000,hatDecay:0.1},
-    'rap':{kickFreq:85,kickDecay:0.55,hatFreq:9500,hatDecay:0.03},
-    'ambient':{kickFreq:110,kickDecay:0.7,hatFreq:4000,hatDecay:0.15},
-    'rock':{kickFreq:160,kickDecay:0.2,hatFreq:6500,hatDecay:0.06},
-    'pop':{kickFreq:170,kickDecay:0.18,hatFreq:7500,hatDecay:0.05},
-    'soul':{kickFreq:160,kickDecay:0.28,hatFreq:6000,hatDecay:0.07},
-    'cinematic':{kickFreq:95,kickDecay:0.75,hatFreq:5000,hatDecay:0.12},
-    'folk':{kickFreq:170,kickDecay:0.25,hatFreq:5500,hatDecay:0.07}
-  };
-
-  function hash(str){
-    var v=0;
-    for(var i=0;i<str.length;i++){v=(v*31+str.charCodeAt(i))|0;}
-    return Math.abs(v);
-  }
-  function ensureCtx(){
-    if(!ctx){
-      var AC=window.AudioContext||window.webkitAudioContext;
-      if(!AC){return null;}
-      ctx=new AC();
-    }
-    if(ctx.state==='suspended'){ctx.resume();}
-    return ctx;
-  }
-  function getNoiseBuffer(c){
-    if(!noiseBuffer){
-      var len=c.sampleRate;
-      noiseBuffer=c.createBuffer(1,len,c.sampleRate);
-      var data=noiseBuffer.getChannelData(0);
-      for(var i=0;i<len;i++){data[i]=Math.random()*2-1;}
-    }
-    return noiseBuffer;
-  }
-  function applyGenre(recipe,mod){
-    if(!mod){return recipe;}
-    var r={};
-    for(var k in recipe){r[k]=recipe[k];}
-    if(recipe.attack!=null)r.attack=recipe.attack*(mod.attackMult||1);
-    if(recipe.filterBase!=null)r.filterBase=recipe.filterBase*(mod.filterMult||1);
-    if(mod.waveOverride){r.wave=mod.waveOverride;if(r.wave2)r.wave2=mod.waveOverride;}
-    return r;
-  }
-  function computeGaps(pattern){
-    var hits=pattern.hits,loop=pattern.loop,gaps=[];
-    for(var i=0;i<hits.length;i++){
-      var next=(i+1<hits.length)?hits[i+1]:loop;
-      gaps.push(Math.max(60,next-hits[i]));
-    }
-    return gaps;
-  }
-  function schedulePattern(hitFn,pattern){
-    var gaps=computeGaps(pattern);
-    var idx=0,timeoutId=null,cancelled=false;
-    function step(){
-      if(cancelled){return;}
-      hitFn();
-      var gap=gaps[idx%gaps.length];
-      if(pattern.humanize){gap+=(Math.random()*2-1)*pattern.humanize;}
-      idx++;
-      timeoutId=setTimeout(step,Math.max(60,gap));
-    }
-    step();
-    return {cancel:function(){cancelled=true;if(timeoutId)clearTimeout(timeoutId);}};
-  }
-  function clearVoices(){
-    var toClear=voices;
-    voices=[];
-    toClear.forEach(function(voice){
-      if(voice.patternHandle){voice.patternHandle.cancel();}
-      if(voice.gain){
-        var now=voice.ctx.currentTime;
-        voice.gain.gain.cancelScheduledValues(now);
-        voice.gain.gain.setValueAtTime(voice.gain.gain.value,now);
-        voice.gain.gain.linearRampToValueAtTime(0,now+0.25);
-      }
-      setTimeout(function(){
-        try{
-          if(voice.osc1)voice.osc1.stop();
-          if(voice.osc2)voice.osc2.stop();
-          if(voice.osc3)voice.osc3.stop();
-          if(voice.osc4)voice.osc4.stop();
-          if(voice.lfo)voice.lfo.stop();
-        }catch(e){}
-      },280);
-    });
-  }
-  function stop(){ clearVoices(); }
-
-  function noiseHit(c,dest,opts){
-    var src=c.createBufferSource();
-    src.buffer=getNoiseBuffer(c);
-    var filter=c.createBiquadFilter();
-    filter.type=opts.filterType||'bandpass';
-    filter.frequency.value=opts.freq;
-    filter.Q.value=opts.q||1;
-    var g=c.createGain();
-    var now=c.currentTime;
-    g.gain.setValueAtTime(0,now);
-    g.gain.linearRampToValueAtTime(opts.peak,now+0.004);
-    g.gain.exponentialRampToValueAtTime(0.001,now+opts.decay);
-    src.connect(filter);filter.connect(g);g.connect(dest);
-    src.start();
-    src.stop(now+opts.decay+0.05);
-  }
-
-  function toneHit(c,dest,opts){
-    var now=c.currentTime;
-    var osc=c.createOscillator();
-    osc.type=opts.wave;
-    osc.frequency.value=opts.freq;
-    var g=c.createGain();
-    g.gain.setValueAtTime(0,now);
-    g.gain.linearRampToValueAtTime(opts.peak,now+0.01);
-    g.gain.exponentialRampToValueAtTime(0.001,now+opts.decay);
-    osc.connect(g);g.connect(dest);
-    osc.start();
-    osc.stop(now+opts.decay+0.05);
-    if(opts.detuneOsc){
-      var osc2=c.createOscillator();
-      osc2.type=opts.wave;
-      osc2.frequency.value=opts.freq*1.003;
-      var g2=c.createGain();
-      g2.gain.setValueAtTime(0,now);
-      g2.gain.linearRampToValueAtTime(opts.peak*0.6,now+0.01);
-      g2.gain.exponentialRampToValueAtTime(0.001,now+opts.decay);
-      osc2.connect(g2);g2.connect(dest);
-      osc2.start();osc2.stop(now+opts.decay+0.05);
-    }
-  }
-
-  function startPad(c,hv,recipe,gainScale,chordSpec){
-    var now=c.currentTime;
-    var baseFreq=NOTES[hv%NOTES.length]*Math.pow(2,recipe.octave||0);
-    var peak=0.16*(gainScale==null?1:gainScale);
-
-    var filter=c.createBiquadFilter();
-    filter.type=recipe.filterType||'lowpass';
-    filter.frequency.value=(recipe.filterBase||1000)+((hv>>3)%600);
-    filter.Q.value=recipe.q||0.7;
-
-    var gain=c.createGain();
-    gain.gain.setValueAtTime(0,now);
-    gain.gain.linearRampToValueAtTime(peak,now+(recipe.attack||0.15));
-
-    var osc1=c.createOscillator();
-    osc1.type=recipe.wave;
-    osc1.frequency.value=baseFreq;
-    osc1.connect(filter);
-    osc1.start();
-
-    var osc2=null,osc3=null,osc4=null;
-
-    if(recipe.chord && chordSpec){
-      // Real chord voicing: root always present, third/fifth/seventh only
-      // when the genre's harmony calls for them (e.g. rock omits the third
-      // for a power chord; rap/minimal-house go root-only for a rhythm-led
-      // feel; jazz/soul/cinematic add a seventh for richer harmony).
-      if(chordSpec.fifth){
-        osc2=c.createOscillator();
-        osc2.type=recipe.wave2||recipe.wave;
-        osc2.frequency.value=baseFreq*chordSpec.fifth;
-        var osc2Gain=c.createGain();
-        osc2Gain.gain.value=0.42;
-        osc2.connect(osc2Gain);osc2Gain.connect(filter);
-        osc2.start();
-      }
-      if(chordSpec.third){
-        osc3=c.createOscillator();
-        osc3.type=recipe.wave;
-        osc3.frequency.value=baseFreq*chordSpec.third;
-        var osc3Gain=c.createGain();
-        osc3Gain.gain.value=0.36;
-        osc3.connect(osc3Gain);osc3Gain.connect(filter);
-        osc3.start();
-      }
-      if(chordSpec.seventh){
-        osc4=c.createOscillator();
-        osc4.type=recipe.wave2||recipe.wave;
-        osc4.frequency.value=baseFreq*chordSpec.seventh;
-        var osc4Gain=c.createGain();
-        osc4Gain.gain.value=0.28;
-        osc4.connect(osc4Gain);osc4Gain.connect(filter);
-        osc4.start();
-      }
-    } else if(!recipe.chord){
-      osc2=c.createOscillator();
-      osc2.type=recipe.wave2||recipe.wave;
-      osc2.frequency.value=baseFreq*(recipe.fifth?1.5:(recipe.detune?1.006:1));
-      var osc2GainPlain=c.createGain();
-      osc2GainPlain.gain.value=0.5;
-      osc2.connect(osc2GainPlain);osc2GainPlain.connect(filter);
-      osc2.start();
-    }
-
-    var lfo=c.createOscillator();
-    lfo.type='sine';
-    var lfoGain=c.createGain();
-    if(recipe.vibrato){
-      lfo.frequency.value=recipe.vibrato;
-      lfoGain.gain.value=baseFreq*0.01;
-      lfo.connect(lfoGain);lfoGain.connect(osc1.frequency);
-      if(osc2)lfoGain.connect(osc2.frequency);
-    } else if(recipe.filterSweep){
-      lfo.frequency.value=0.15+((hv%7)*0.05);
-      lfoGain.gain.value=300;
-      lfo.connect(lfoGain);lfoGain.connect(filter.frequency);
-    } else {
-      lfo.frequency.value=0.15+((hv%7)*0.05);
-      lfoGain.gain.value=0.05;
-      lfo.connect(lfoGain);lfoGain.connect(gain.gain);
-    }
-    lfo.start();
-
-    filter.connect(gain);gain.connect(c.destination);
-
-    voices.push({ctx:c,osc1:osc1,osc2:osc2,osc3:osc3,osc4:osc4,lfo:lfo,gain:gain});
-  }
-
-  function startPulseTone(c,hv,recipe,gainScale,pattern){
-    var scale=gainScale==null?1:gainScale;
-    var baseFreq=NOTES[hv%NOTES.length]*(recipe.octave?Math.pow(2,recipe.octave):1);
-    var master=c.createGain();
-    master.gain.value=0.5*scale;
-    master.connect(c.destination);
-    function hit(){
-      toneHit(c,master,{wave:recipe.wave,freq:baseFreq,peak:0.22,decay:recipe.decay,detuneOsc:recipe.detuneOsc});
-    }
-    var handle=schedulePattern(hit,pattern);
-    voices.push({ctx:c,patternHandle:handle,gain:master});
-  }
-
-  function startPulseNoise(c,hv,recipe,gainScale,pattern,perc){
-    var scale=gainScale==null?1:gainScale;
-    var master=c.createGain();
-    master.gain.value=0.5*scale;
-    master.connect(c.destination);
-    var toggle=0;
-    function hit(){
-      if(recipe.tone==='kit'){
-        if(toggle%2===0){
-          noiseHit(c,master,{filterType:'lowpass',freq:perc.kickFreq,q:1,peak:0.5,decay:perc.kickDecay});
-        } else {
-          noiseHit(c,master,{filterType:'highpass',freq:perc.hatFreq,q:0.8,peak:0.22,decay:perc.hatDecay});
-        }
-        toggle++;
-      } else {
-        noiseHit(c,master,{filterType:'highpass',freq:perc.hatFreq,q:0.9,peak:0.18,decay:perc.hatDecay});
-      }
-    }
-    var handle=schedulePattern(hit,pattern);
-    voices.push({ctx:c,patternHandle:handle,gain:master});
-  }
-
-  function startVoiceForField(c,key,field,genreId,gainScale){
-    var hv=hash(key);
-    var base=RECIPES[field];
-    if(!base){
-      var wave=WAVES[Math.floor(hv/NOTES.length)%WAVES.length];
-      base={kind:'pad',wave:wave,attack:0.15,filterBase:800+((hv>>3)%1600)};
-    }
-    var recipe=applyGenre(base,GENRE_MODS[genreId]);
-    var pattern=GENRE_RHYTHM[genreId]||GENRE_RHYTHM['resin-selects'];
-    var chordSpec=GENRE_CHORD[genreId]||GENRE_CHORD['resin-selects'];
-    var perc=GENRE_PERC[genreId]||GENRE_PERC['resin-selects'];
-    if(recipe.kind==='pulse-tone'){ startPulseTone(c,hv,recipe,gainScale,pattern); }
-    else if(recipe.kind==='pulse-noise'){ startPulseNoise(c,hv,recipe,gainScale,pattern,perc); }
-    else { startPad(c,hv,recipe,gainScale,chordSpec); }
-  }
-
-  function play(key,field,genreId,stemFields){
-    clearVoices();
-    var c=ensureCtx();
-    if(!c){return;}
-    if(field==='full-mix' && stemFields && stemFields.length){
-      var layers=stemFields.slice(0,MAX_MIX_LAYERS);
-      var layerGain=1/Math.sqrt(layers.length);
-      layers.forEach(function(stemField,i){
-        startVoiceForField(c,key+'::layer::'+i+'::'+stemField,stemField,genreId,layerGain);
-      });
-    } else {
-      startVoiceForField(c,key,field,genreId,1);
-    }
-  }
-  return {play:play,stop:stop};
-})();
 var h = React.createElement;
 var useState = React.useState;
 var useEffect = React.useEffect;
@@ -2897,7 +2529,6 @@ function libraryItems(){
         id:masterId,
         name:'Master Mix',
         field:'full-mix',
-        stemFields:work.stemList.map(function(s){return s.field;}),
         genreId:genre.id,
         genreLabel:genre.label,
         title:work.title,
@@ -3092,15 +2723,6 @@ function EggView(props){
   var marketPlayingState=useState(null);
   var marketPlaying=marketPlayingState[0];
   var setMarketPlaying=marketPlayingState[1];
-  var audioMetaState=useState(null);
-  var audioMeta=audioMetaState[0];
-  var setAudioMeta=audioMetaState[1];
-  useEffect(function(){
-    if(playingSource){ResinAudio.play(playingSource,audioMeta&&audioMeta.field,audioMeta&&audioMeta.genreId,audioMeta&&audioMeta.stemFields);}else{ResinAudio.stop();}
-  },[playingSource,audioMeta]);
-  useEffect(function(){
-    if(marketPlaying){ResinAudio.play('market::'+marketPlaying,audioMeta&&audioMeta.field,audioMeta&&audioMeta.genreId,audioMeta&&audioMeta.stemFields);}else if(!playingSource){ResinAudio.stop();}
-  },[marketPlaying]);
   var marketSearchState=useState('');
   var marketSearch=marketSearchState[0];
   var setMarketSearch=marketSearchState[1];
@@ -3364,9 +2986,8 @@ function EggView(props){
     setMarketVisible(MARKET_BATCH);
   }
 
-  function toggleMarketPlay(itemId,field,genreId,stemFields){
+  function toggleMarketPlay(itemId){
     setMarketPlaying(function(prev){return prev===itemId?null:itemId;});
-    setAudioMeta(field?{field:field,genreId:genreId||null,stemFields:stemFields||null}:null);
   }
 
   useEffect(function(){
@@ -3394,12 +3015,11 @@ function EggView(props){
     return playingSource===sourceKey(work, source);
   }
 
-  function togglePlayback(work, source, field, genreId, stemFields){
+  function togglePlayback(work, source){
     var key=sourceKey(work, source);
     var next=playingSource===key?null:key;
     setPlayingSource(next);
     setPreviewing(!!next);
-    setAudioMeta(next&&field?{field:field,genreId:genreId||null,stemFields:stemFields||null}:null);
   }
 
   function activateGenre(genre){
@@ -3546,7 +3166,7 @@ function EggView(props){
             'aria-label':(tilePlaying?'Pause ':'Play ')+item.title,
             onClick:(function(work){return function(event){
               event.stopPropagation();
-              togglePlayback(work,'master','full-mix',active.id,(work.stemList||[]).map(function(s){return s.field;}));
+              togglePlayback(work,'master');
             };})(item)
           },tilePlaying?'||':'>')
         ),
@@ -3584,7 +3204,7 @@ function EggView(props){
   function focusedWorkView(){
     if(!featuredWork){return null;}
     var position=selectedIndex<0?1:selectedIndex+1;
-    var audioSources=[{name:'Master Mix',field:'full-mix'}].concat(featuredWork.stemList||[]);
+    var audioSources=[{name:'Master Mix',field:null}].concat(featuredWork.stemList||[]);
     var audioRows=[];
     for(var ar=0;ar<audioSources.length;ar++){
       var audioName=audioSources[ar].name;
@@ -3600,12 +3220,12 @@ function EggView(props){
             className:'audio-play',
             type:'button',
             'aria-label':(rowPlaying?'Pause ':'Play ')+audioName,
-            onClick:function(source,field,stemFields){
+            onClick:function(source){
               return function(event){
                 event.stopPropagation();
-                togglePlayback(featuredWork,source,field,active.id,stemFields);
+                togglePlayback(featuredWork,source);
               };
-            }(sourceId,audioSources[ar].field,(featuredWork.stemList||[]).map(function(s){return s.field;}))
+            }(sourceId)
           },rowPlaying?'||':'>'),
           h('div',null,
             h('div',{className:'audio-name'},audioName)
@@ -3633,7 +3253,6 @@ function EggView(props){
       );
     }
     var stemRows=[];
-    var STEM_ROW_FIELDS={'Master Mix':'full-mix','Drum Stem':'percussion','Synth Stem':'synth','Bassline Stem':'bass'};
     for(var sr=0;sr<STEMS.length;sr++){
       var stemSource=STEMS[sr].toLowerCase().replace(/\s+/g,'-');
       var stemPlaying=isPlaying(featuredWork,stemSource);
@@ -3645,12 +3264,12 @@ function EggView(props){
           h('button',{
             className:'audio-license',
             type:'button',
-            onClick:function(source,field,stemFields){
+            onClick:function(source){
               return function(event){
                 event.stopPropagation();
-                togglePlayback(featuredWork,source,field,active.id,stemFields);
+                togglePlayback(featuredWork,source);
               };
-            }(stemSource,STEM_ROW_FIELDS[STEMS[sr]],(featuredWork.stemList||[]).map(function(s){return s.field;}))
+            }(stemSource)
           },stemPlaying?'pause':'play')
         )
       );
@@ -3695,7 +3314,7 @@ function EggView(props){
             'aria-label':(cwPlaying?'Pause ':'Play ')+cwWork.title,
             onClick:(function(w){return function(event){
               event.stopPropagation();
-              togglePlayback(w,'master','full-mix',active.id,(w.stemList||[]).map(function(s){return s.field;}));
+              togglePlayback(w,'master');
             };})(cwWork)
           },playPauseIcon(cwPlaying)),
           h('button',{
@@ -3876,7 +3495,7 @@ function EggView(props){
           className:'market-tile-play',
           type:'button',
           'aria-label':(playing?'Pause ':'Play ')+item.name,
-          onClick:function(){toggleMarketPlay(item.id,item.field,item.genreId,item.stemFields);}
+          onClick:function(){toggleMarketPlay(item.id);}
         },playPauseIcon(playing)),
         h('div',{className:'market-tile-body'},
           h('div',{className:'market-tile-name'},item.name),
