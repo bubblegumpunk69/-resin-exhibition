@@ -67,6 +67,7 @@ body{
 .tw{background:linear-gradient(90deg,transparent,#D4AA30 30%,#D4AA30 50%,transparent 70%);background-size:200% 100%;}
 .tc:hover .tw{animation:ws 1.5s ease-in-out infinite;}
 @keyframes ws{0%,100%{background-position:0% 0}50%{background-position:100% 0}}
+@keyframes meterPulse{0%,100%{transform:scaleY(0.6)}50%{transform:scaleY(1)}}
 .cell-wave{position:absolute;inset:0;overflow:hidden;pointer-events:none;opacity:0.12;}
 .cell-wave canvas{width:100%;height:100%;}
 button{font-family:inherit;cursor:pointer;-webkit-appearance:none;appearance:none;}
@@ -1446,12 +1447,24 @@ body::after{
   align-self:end;
   height:35%;
   background:rgba(var(--ink-rgb),0.22);
+  transform-origin:bottom;
+}
+.audio-row.playing .audio-meter span{
+  animation:meterPulse 900ms ease-in-out infinite;
+}
+.audio-meter span:nth-child(2n){
+  animation-delay:-120ms;
 }
 .audio-meter span:nth-child(3n){
   height:72%;
+  animation-delay:-260ms;
 }
 .audio-meter span:nth-child(4n){
   height:52%;
+  animation-delay:-400ms;
+}
+.audio-meter span:nth-child(7n){
+  animation-delay:-680ms;
 }
 .audio-meter span:nth-child(5n){
   height:88%;
