@@ -2251,16 +2251,69 @@ var ResinAudio = (function(){
   // different character, so genre is audible everywhere, not just element.
   var GENRE_MODS={
     'resin-selects':{},
-    'classical':{attackMult:2.2,filterMult:0.75,intervalMult:1.4},
-    'minimal-house':{attackMult:0.45,filterMult:1.3,intervalMult:0.5,waveOverride:'square'},
-    'jazz':{attackMult:1.3,filterMult:1.05,intervalMult:1.15,swing:true},
-    'rap':{attackMult:0.3,filterMult:0.9,intervalMult:0.65},
-    'ambient':{attackMult:3.2,filterMult:0.6,intervalMult:2.2},
-    'rock':{attackMult:0.35,filterMult:1.4,intervalMult:0.85,waveOverride:'square'},
-    'pop':{attackMult:0.6,filterMult:1.25,intervalMult:0.75},
-    'soul':{attackMult:1.6,filterMult:0.95,intervalMult:1.2},
-    'cinematic':{attackMult:3.0,filterMult:0.85,intervalMult:1.8},
-    'folk':{attackMult:1.1,filterMult:0.9,intervalMult:1.3,waveOverride:'triangle'}
+    'classical':{attackMult:2.2,filterMult:0.75},
+    'minimal-house':{attackMult:0.45,filterMult:1.3,waveOverride:'square'},
+    'jazz':{attackMult:1.3,filterMult:1.05},
+    'rap':{attackMult:0.3,filterMult:0.9},
+    'ambient':{attackMult:3.2,filterMult:0.6},
+    'rock':{attackMult:0.35,filterMult:1.4,waveOverride:'square'},
+    'pop':{attackMult:0.6,filterMult:1.25},
+    'soul':{attackMult:1.6,filterMult:0.95},
+    'cinematic':{attackMult:3.0,filterMult:0.85},
+    'folk':{attackMult:1.1,filterMult:0.9,waveOverride:'triangle'}
+  };
+
+  // Real rhythmic patterns per genre: onset offsets (ms) within a repeating
+  // loop, not just a faster/slower flat interval. This is what actually
+  // makes minimal-house read as four-on-the-floor, rap as boom-bap, jazz as
+  // swung, and classical/ambient/cinematic as sparse and non-metronomic
+  // rather than "still a beeping loop, just slower."
+  var GENRE_RHYTHM={
+    'resin-selects':{loop:800,hits:[0,400]},
+    'classical':{loop:2600,hits:[0,1300],humanize:140},
+    'minimal-house':{loop:2000,hits:[0,500,1000,1500]},
+    'jazz':{loop:1800,hits:[0,300,900,1200],humanize:40},
+    'rap':{loop:1500,hits:[0,750,1125]},
+    'ambient':{loop:4200,hits:[0],humanize:320},
+    'rock':{loop:1000,hits:[0,250,500,750]},
+    'pop':{loop:1000,hits:[0,500,750]},
+    'soul':{loop:1600,hits:[0,400,1000,1200]},
+    'cinematic':{loop:3400,hits:[0,1700],humanize:220},
+    'folk':{loop:1400,hits:[0,700,1050]}
+  };
+
+  // Chord quality per genre for the full-mix layer's harmonic content:
+  // interval ratios above the root (null = omit that voice entirely).
+  // Power chords for rock (no third), 7ths for jazz, root-only for
+  // rhythm-led rap/minimal-house, a suspended 4th for ambient's open feel.
+  var GENRE_CHORD={
+    'resin-selects':{third:1.25,fifth:1.5},
+    'classical':{third:1.25,fifth:1.5},
+    'minimal-house':{third:null,fifth:1.5},
+    'jazz':{third:1.25,fifth:1.5,seventh:1.78},
+    'rap':{third:null,fifth:null},
+    'ambient':{third:null,fifth:1.333},
+    'rock':{third:null,fifth:1.5},
+    'pop':{third:1.25,fifth:1.5},
+    'soul':{third:1.2,fifth:1.5,seventh:1.68},
+    'cinematic':{third:1.25,fifth:1.5,seventh:1.875},
+    'folk':{third:1.25,fifth:1.5}
+  };
+
+  // Percussion timbre per genre: rap leans toward a deep 808-style sub kick
+  // with a long tail, minimal-house toward a tight electronic click, etc.
+  var GENRE_PERC={
+    'resin-selects':{kickFreq:180,kickDecay:0.22,hatFreq:6000,hatDecay:0.06},
+    'classical':{kickFreq:150,kickDecay:0.35,hatFreq:5000,hatDecay:0.08},
+    'minimal-house':{kickFreq:150,kickDecay:0.16,hatFreq:8500,hatDecay:0.04},
+    'jazz':{kickFreq:170,kickDecay:0.3,hatFreq:7000,hatDecay:0.1},
+    'rap':{kickFreq:85,kickDecay:0.55,hatFreq:9500,hatDecay:0.03},
+    'ambient':{kickFreq:110,kickDecay:0.7,hatFreq:4000,hatDecay:0.15},
+    'rock':{kickFreq:160,kickDecay:0.2,hatFreq:6500,hatDecay:0.06},
+    'pop':{kickFreq:170,kickDecay:0.18,hatFreq:7500,hatDecay:0.05},
+    'soul':{kickFreq:160,kickDecay:0.28,hatFreq:6000,hatDecay:0.07},
+    'cinematic':{kickFreq:95,kickDecay:0.75,hatFreq:5000,hatDecay:0.12},
+    'folk':{kickFreq:170,kickDecay:0.25,hatFreq:5500,hatDecay:0.07}
   };
 
   function hash(str){
@@ -2292,16 +2345,36 @@ var ResinAudio = (function(){
     for(var k in recipe){r[k]=recipe[k];}
     if(recipe.attack!=null)r.attack=recipe.attack*(mod.attackMult||1);
     if(recipe.filterBase!=null)r.filterBase=recipe.filterBase*(mod.filterMult||1);
-    if(recipe.interval!=null)r.interval=recipe.interval*(mod.intervalMult||1);
     if(mod.waveOverride){r.wave=mod.waveOverride;if(r.wave2)r.wave2=mod.waveOverride;}
-    r.swing=!!mod.swing;
     return r;
+  }
+  function computeGaps(pattern){
+    var hits=pattern.hits,loop=pattern.loop,gaps=[];
+    for(var i=0;i<hits.length;i++){
+      var next=(i+1<hits.length)?hits[i+1]:loop;
+      gaps.push(Math.max(60,next-hits[i]));
+    }
+    return gaps;
+  }
+  function schedulePattern(hitFn,pattern){
+    var gaps=computeGaps(pattern);
+    var idx=0,timeoutId=null,cancelled=false;
+    function step(){
+      if(cancelled){return;}
+      hitFn();
+      var gap=gaps[idx%gaps.length];
+      if(pattern.humanize){gap+=(Math.random()*2-1)*pattern.humanize;}
+      idx++;
+      timeoutId=setTimeout(step,Math.max(60,gap));
+    }
+    step();
+    return {cancel:function(){cancelled=true;if(timeoutId)clearTimeout(timeoutId);}};
   }
   function clearVoices(){
     var toClear=voices;
     voices=[];
     toClear.forEach(function(voice){
-      if(voice.intervalId){clearInterval(voice.intervalId);}
+      if(voice.patternHandle){voice.patternHandle.cancel();}
       if(voice.gain){
         var now=voice.ctx.currentTime;
         voice.gain.gain.cancelScheduledValues(now);
@@ -2313,6 +2386,7 @@ var ResinAudio = (function(){
           if(voice.osc1)voice.osc1.stop();
           if(voice.osc2)voice.osc2.stop();
           if(voice.osc3)voice.osc3.stop();
+          if(voice.osc4)voice.osc4.stop();
           if(voice.lfo)voice.lfo.stop();
         }catch(e){}
       },280);
@@ -2362,7 +2436,7 @@ var ResinAudio = (function(){
     }
   }
 
-  function startPad(c,hv,recipe,gainScale){
+  function startPad(c,hv,recipe,gainScale,chordSpec){
     var now=c.currentTime;
     var baseFreq=NOTES[hv%NOTES.length]*Math.pow(2,recipe.octave||0);
     var peak=0.16*(gainScale==null?1:gainScale);
@@ -2382,23 +2456,48 @@ var ResinAudio = (function(){
     osc1.connect(filter);
     osc1.start();
 
-    var osc2=c.createOscillator();
-    osc2.type=recipe.wave2||recipe.wave;
-    osc2.frequency.value=baseFreq*(recipe.fifth?1.5:(recipe.detune?1.006:1));
-    var osc2Gain=c.createGain();
-    osc2Gain.gain.value=recipe.chord?0.45:0.5;
-    osc2.connect(osc2Gain);osc2Gain.connect(filter);
-    osc2.start();
+    var osc2=null,osc3=null,osc4=null;
 
-    var osc3=null;
-    if(recipe.chord){
-      osc3=c.createOscillator();
-      osc3.type=recipe.wave;
-      osc3.frequency.value=baseFreq*1.25;
-      var osc3Gain=c.createGain();
-      osc3Gain.gain.value=0.4;
-      osc3.connect(osc3Gain);osc3Gain.connect(filter);
-      osc3.start();
+    if(recipe.chord && chordSpec){
+      // Real chord voicing: root always present, third/fifth/seventh only
+      // when the genre's harmony calls for them (e.g. rock omits the third
+      // for a power chord; rap/minimal-house go root-only for a rhythm-led
+      // feel; jazz/soul/cinematic add a seventh for richer harmony).
+      if(chordSpec.fifth){
+        osc2=c.createOscillator();
+        osc2.type=recipe.wave2||recipe.wave;
+        osc2.frequency.value=baseFreq*chordSpec.fifth;
+        var osc2Gain=c.createGain();
+        osc2Gain.gain.value=0.42;
+        osc2.connect(osc2Gain);osc2Gain.connect(filter);
+        osc2.start();
+      }
+      if(chordSpec.third){
+        osc3=c.createOscillator();
+        osc3.type=recipe.wave;
+        osc3.frequency.value=baseFreq*chordSpec.third;
+        var osc3Gain=c.createGain();
+        osc3Gain.gain.value=0.36;
+        osc3.connect(osc3Gain);osc3Gain.connect(filter);
+        osc3.start();
+      }
+      if(chordSpec.seventh){
+        osc4=c.createOscillator();
+        osc4.type=recipe.wave2||recipe.wave;
+        osc4.frequency.value=baseFreq*chordSpec.seventh;
+        var osc4Gain=c.createGain();
+        osc4Gain.gain.value=0.28;
+        osc4.connect(osc4Gain);osc4Gain.connect(filter);
+        osc4.start();
+      }
+    } else if(!recipe.chord){
+      osc2=c.createOscillator();
+      osc2.type=recipe.wave2||recipe.wave;
+      osc2.frequency.value=baseFreq*(recipe.fifth?1.5:(recipe.detune?1.006:1));
+      var osc2GainPlain=c.createGain();
+      osc2GainPlain.gain.value=0.5;
+      osc2.connect(osc2GainPlain);osc2GainPlain.connect(filter);
+      osc2.start();
     }
 
     var lfo=c.createOscillator();
@@ -2407,7 +2506,8 @@ var ResinAudio = (function(){
     if(recipe.vibrato){
       lfo.frequency.value=recipe.vibrato;
       lfoGain.gain.value=baseFreq*0.01;
-      lfo.connect(lfoGain);lfoGain.connect(osc1.frequency);lfoGain.connect(osc2.frequency);
+      lfo.connect(lfoGain);lfoGain.connect(osc1.frequency);
+      if(osc2)lfoGain.connect(osc2.frequency);
     } else if(recipe.filterSweep){
       lfo.frequency.value=0.15+((hv%7)*0.05);
       lfoGain.gain.value=300;
@@ -2421,30 +2521,23 @@ var ResinAudio = (function(){
 
     filter.connect(gain);gain.connect(c.destination);
 
-    voices.push({ctx:c,osc1:osc1,osc2:osc2,osc3:osc3,lfo:lfo,gain:gain});
+    voices.push({ctx:c,osc1:osc1,osc2:osc2,osc3:osc3,osc4:osc4,lfo:lfo,gain:gain});
   }
 
-  function startPulseTone(c,hv,recipe,gainScale){
+  function startPulseTone(c,hv,recipe,gainScale,pattern){
     var scale=gainScale==null?1:gainScale;
     var baseFreq=NOTES[hv%NOTES.length]*(recipe.octave?Math.pow(2,recipe.octave):1);
     var master=c.createGain();
     master.gain.value=0.5*scale;
     master.connect(c.destination);
-    var swingToggle=0;
     function hit(){
       toneHit(c,master,{wave:recipe.wave,freq:baseFreq,peak:0.22,decay:recipe.decay,detuneOsc:recipe.detuneOsc});
-      if(recipe.swing){
-        swingToggle++;
-        clearInterval(id);
-        id=setInterval(hit,recipe.interval*(swingToggle%2?1.5:0.7));
-      }
     }
-    hit();
-    var id=setInterval(hit,recipe.interval);
-    voices.push({ctx:c,intervalId:id,gain:master});
+    var handle=schedulePattern(hit,pattern);
+    voices.push({ctx:c,patternHandle:handle,gain:master});
   }
 
-  function startPulseNoise(c,hv,recipe,gainScale){
+  function startPulseNoise(c,hv,recipe,gainScale,pattern,perc){
     var scale=gainScale==null?1:gainScale;
     var master=c.createGain();
     master.gain.value=0.5*scale;
@@ -2453,18 +2546,17 @@ var ResinAudio = (function(){
     function hit(){
       if(recipe.tone==='kit'){
         if(toggle%2===0){
-          noiseHit(c,master,{filterType:'lowpass',freq:180,q:1,peak:0.5,decay:0.22});
+          noiseHit(c,master,{filterType:'lowpass',freq:perc.kickFreq,q:1,peak:0.5,decay:perc.kickDecay});
         } else {
-          noiseHit(c,master,{filterType:'highpass',freq:6000,q:0.8,peak:0.22,decay:0.08});
+          noiseHit(c,master,{filterType:'highpass',freq:perc.hatFreq,q:0.8,peak:0.22,decay:perc.hatDecay});
         }
         toggle++;
       } else {
-        noiseHit(c,master,{filterType:'highpass',freq:7000,q:0.9,peak:0.18,decay:0.06});
+        noiseHit(c,master,{filterType:'highpass',freq:perc.hatFreq,q:0.9,peak:0.18,decay:perc.hatDecay});
       }
     }
-    hit();
-    var id=setInterval(hit,recipe.interval);
-    voices.push({ctx:c,intervalId:id,gain:master});
+    var handle=schedulePattern(hit,pattern);
+    voices.push({ctx:c,patternHandle:handle,gain:master});
   }
 
   function startVoiceForField(c,key,field,genreId,gainScale){
@@ -2475,9 +2567,12 @@ var ResinAudio = (function(){
       base={kind:'pad',wave:wave,attack:0.15,filterBase:800+((hv>>3)%1600)};
     }
     var recipe=applyGenre(base,GENRE_MODS[genreId]);
-    if(recipe.kind==='pulse-tone'){ startPulseTone(c,hv,recipe,gainScale); }
-    else if(recipe.kind==='pulse-noise'){ startPulseNoise(c,hv,recipe,gainScale); }
-    else { startPad(c,hv,recipe,gainScale); }
+    var pattern=GENRE_RHYTHM[genreId]||GENRE_RHYTHM['resin-selects'];
+    var chordSpec=GENRE_CHORD[genreId]||GENRE_CHORD['resin-selects'];
+    var perc=GENRE_PERC[genreId]||GENRE_PERC['resin-selects'];
+    if(recipe.kind==='pulse-tone'){ startPulseTone(c,hv,recipe,gainScale,pattern); }
+    else if(recipe.kind==='pulse-noise'){ startPulseNoise(c,hv,recipe,gainScale,pattern,perc); }
+    else { startPad(c,hv,recipe,gainScale,chordSpec); }
   }
 
   function play(key,field,genreId,stemFields){
