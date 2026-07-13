@@ -2223,6 +2223,85 @@ body::before{
 })();
 </script>
 <script>
+var ResinAudio = (function(){
+  var ctx=null, voice=null;
+  var NOTES=[130.81,146.83,164.81,196.00,220.00,261.63,293.66,329.63,392.00,440.00,523.25];
+  var WAVES=['sine','triangle','sawtooth'];
+  function hash(str){
+    var v=0;
+    for(var i=0;i<str.length;i++){v=(v*31+str.charCodeAt(i))|0;}
+    return Math.abs(v);
+  }
+  function ensureCtx(){
+    if(!ctx){
+      var AC=window.AudioContext||window.webkitAudioContext;
+      if(!AC){return null;}
+      ctx=new AC();
+    }
+    if(ctx.state==='suspended'){ctx.resume();}
+    return ctx;
+  }
+  function stop(){
+    if(!voice){return;}
+    var now=voice.ctx.currentTime;
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setValueAtTime(voice.gain.gain.value,now);
+    voice.gain.gain.linearRampToValueAtTime(0,now+0.3);
+    var toStop=voice;
+    setTimeout(function(){
+      try{toStop.osc1.stop();toStop.osc2.stop();toStop.lfo.stop();}catch(e){}
+    },320);
+    voice=null;
+  }
+  function play(key){
+    stop();
+    var c=ensureCtx();
+    if(!c){return;}
+    var hv=hash(key);
+    var freq=NOTES[hv%NOTES.length];
+    var wave=WAVES[Math.floor(hv/NOTES.length)%WAVES.length];
+    var now=c.currentTime;
+
+    var filter=c.createBiquadFilter();
+    filter.type='lowpass';
+    filter.frequency.value=800+((hv>>3)%1600);
+    filter.Q.value=0.7;
+
+    var gain=c.createGain();
+    gain.gain.setValueAtTime(0,now);
+    gain.gain.linearRampToValueAtTime(0.16,now+0.15);
+
+    var osc1=c.createOscillator();
+    osc1.type=wave;
+    osc1.frequency.value=freq;
+    var osc2=c.createOscillator();
+    osc2.type=wave;
+    osc2.frequency.value=freq*1.5;
+    var osc2Gain=c.createGain();
+    osc2Gain.gain.value=0.5;
+
+    var lfo=c.createOscillator();
+    lfo.type='sine';
+    lfo.frequency.value=0.15+((hv%7)*0.05);
+    var lfoGain=c.createGain();
+    lfoGain.gain.value=0.05;
+    lfo.connect(lfoGain);
+    lfoGain.connect(gain.gain);
+
+    osc1.connect(filter);
+    osc2.connect(osc2Gain);
+    osc2Gain.connect(filter);
+    filter.connect(gain);
+    gain.connect(c.destination);
+
+    osc1.start();
+    osc2.start();
+    lfo.start();
+
+    voice={ctx:c,osc1:osc1,osc2:osc2,lfo:lfo,gain:gain};
+  }
+  return {play:play,stop:stop};
+})();
 var h = React.createElement;
 var useState = React.useState;
 var useEffect = React.useEffect;
@@ -2723,6 +2802,12 @@ function EggView(props){
   var marketPlayingState=useState(null);
   var marketPlaying=marketPlayingState[0];
   var setMarketPlaying=marketPlayingState[1];
+  useEffect(function(){
+    if(playingSource){ResinAudio.play(playingSource);}else{ResinAudio.stop();}
+  },[playingSource]);
+  useEffect(function(){
+    if(marketPlaying){ResinAudio.play('market::'+marketPlaying);}else if(!playingSource){ResinAudio.stop();}
+  },[marketPlaying]);
   var marketSearchState=useState('');
   var marketSearch=marketSearchState[0];
   var setMarketSearch=marketSearchState[1];
