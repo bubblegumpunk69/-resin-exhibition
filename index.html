@@ -3219,7 +3219,22 @@ function EggView(props){
           ),
           audioName==='Master Mix'
             ? null
-            : h('button',{className:'audio-license',type:'button'},'request license'),
+            : h('button',{
+                className:'audio-license',
+                type:'button',
+                onClick:(function(work,source){
+                  return function(event){
+                    event.stopPropagation();
+                    openLicense({
+                      id:(work.title+'::'+source.name).toLowerCase().replace(/\s+/g,'-'),
+                      name:source.name,
+                      title:work.title,
+                      creator:work.creator,
+                      field:source.field
+                    });
+                  };
+                })(featuredWork,audioSources[ar])
+              },'request license'),
           h('div',{className:'audio-meter'},meterBars)
         )
       );
